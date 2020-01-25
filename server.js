@@ -1,70 +1,85 @@
-const express = require("express");
-const app = express();
-const fs = require("fs");
+const express = require("express")
+, socketapp = require("http").createServer()
+, io = require("socket.io").listen(socketapp)
+, app = express()
+, fs = require("fs");
+
+socketapp.listen(8000);
 app.use(express.json());
 
 let Files = {};
 
-app.post("/startUpload", (req, res, next) => {
-  if (!fs.existsSync("FileStorage/")) fs.mkdirSync("FileStorage/");
-  Files[req.body.name] = {
-    fileSize: req.body.fileSize,
-    download: 0,
-    buffer: 0,
-    place: 0
-  };
-  try {
-    const Stat = fs.statSync("FileStorage/" + req.body.name);
-    if (Stat.isFile()) {
-      Files[req.body.name]["download"] = Stat.size;
-      Files[req.body.name]["place"] = Stat.size / 1024000;
-    }
-  } catch (err) {}
-  fs.open("FileStorage/" + req.body.name, "a", 0755, (err, fdata) => {
-    if (err) return console.log(err.message);
-    Files[req.body.name]["Handler"] = fdata;
-    res.send([
-      "More_data",
-      {
-        place: Files[req.body.name]["place"],
-        download: Files[req.body.name]["download"]
+io.sockets.on("connection", function(socket) {
+  socket.on("startUpload", data => {
+    if (!fs.existsSync("FileStorage/")) fs.mkdirSync("FileStorage/");
+    const Name = data.name;
+    Files[Name] = {
+      fileSize: data.fileSize,
+      download: 0,
+      buffer: ""
+    };
+    try {
+      const Stat = fs.statSync("FileStorage/" + Name);
+      if (Stat.isFile()) {
+        Files[Name]["download"] = Stat.size;
+        Files[Name]["place"] = Stat.size / 1024000;
       }
-    ]);
-  });
-});
+    } catch (err) {}
 
-app.post("/continueUpload", (req, res) => {
-  console.log(req.body);
-  const Name = req.body.name;
-  Files[Name]["download"] += req.body.chunk.length;
-  Files[Name]["data"] += req.body.chunk;
-  if (Files[Name]["download"] == Files[Name]["filesize"]) {
-    fs.write(
-      Files[Name]["Handler"],
-      Files[Name]["data"],
-      null,
-      "Binary",
-      function(err, Writen) {
-        res.send(["Done"]);
-      }
-    );
-  } else if (Files[Name]["data"].length >= 10240000) {
-    Files[Name]["data"] = "";
-    fs.write(
-      Files[Name]["Handler"],
-      Files[Name]["data"],
-      null,
-      "Binary",
-      function(err, Writen) {
-        res.send(["More_data"]);
-      }
-    );
-  } else {
-    var place = Files[Name]["download"] / 1024000;
-    console.log(place);
-    // var Percent = (Files[Name]["Downloaded"] / Files[Name]["FileSize"]) * 100;
-    res.send(["More_data", { place: place }]);
-  }
+    fs.open("FileStorage/" + Name, "a", 0755, (err, fdata) => {
+      if (err) return console.log(err.message);
+      Files[Name]["Handler"] = fdata;
+      socket.emit("More_data", {
+        place: Files[Name]["place"],
+        downloaded: Files[Name]["download"]
+      });
+    });
+  });
+
+  socket.on("cancel", data => {
+    fs.unlink(`FileStorage/${data.name}`, () => {});
+  });
+
+  socket.on("continueUpload", data => {
+    const Name = data.name;
+    Files[Name]["download"] += data.chunk.length;
+    Files[Name]["buffer"] += data.chunk;
+    if (Files[Name]["download"] == Files[Name]["fileSize"]) {
+      fs.write(
+        Files[Name]["Handler"],
+        Files[Name]["buffer"],
+        null,
+        "Binary",
+        function(err, Writen) {
+          socket.emit("Done");
+        }
+      );
+    } else if (Files[Name]["buffer"].length >= 10240000) {
+      fs.write(
+        Files[Name]["Handler"],
+        Files[Name]["buffer"],
+        null,
+        "Binary",
+        function(err, Writen) {
+          Files[Name]["buffer"] = "";
+          var place = Files[Name]["download"] / 1024000;
+          var Percent =
+            (Files[Name]["download"] / Files[Name]["fileSize"]) * 100;
+          socket.emit("More_data", {
+            place: place,
+            downloaded: Percent
+          });
+        }
+      );
+    } else {
+      var place = Files[Name]["download"] / 1024000;
+      var Percent = (Files[Name]["download"] / Files[Name]["fileSize"]) * 100;
+      socket.emit("More_data", {
+        place: place,
+        downloaded: Percent
+      });
+    }
+  });
 });
 
 app.listen(5200, () => {
